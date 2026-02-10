@@ -1,0 +1,26 @@
+venv/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Models (large files)
+models/*.rkllm
+models/*.bin
+models/*.safetensors
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
