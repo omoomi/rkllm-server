@@ -1,9 +1,9 @@
 import requests
 
-url = "http://localhost:8080/v1/chat/completions"
+url = "http://localhost:11434/v1/chat/completions"
 
 response = requests.post(url, json={
-    "model": "Qwen3-0.6B-RKLLM",
+    "model": "Qwen3-0.6B-w8a8-ctx16384",
     "messages": [
         {"role": "user", "content": "Tell me a short joke."},
     ],

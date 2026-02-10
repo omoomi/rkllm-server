@@ -19,8 +19,15 @@ bash scripts/verify_models.sh
 # - RKLLM Runtime: https://console.zbox.filez.com/l/RJJDmB (code: rkllm)
 # - Model: https://huggingface.co/ThomasTheMaker/Qwen3-0.6B-RKLLM-1.2.1B
 
-# 4. Start server
+# 4. Configure server (optional)
+cp .env.example .env
+# Edit .env to customize model, port, and settings
+
+# 5. Start server
 ./run_server.sh
+
+# 6. Test the server
+curl http://localhost:11434/health
 ```
 
 ## Features
@@ -79,10 +86,10 @@ ENABLE_EMBED_FLASH=1
 
 ```bash
 # Test health
-curl http://localhost:8080/health
+curl http://localhost:11434/health
 
 # List models
-curl http://localhost:8080/v1/models
+curl http://localhost:11434/v1/models
 
 # Run tests
 source venv/bin/activate
@@ -94,7 +101,7 @@ pytest tests/
 ### cURL
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen3-0.6B-w8a8-ctx16384",
@@ -108,7 +115,7 @@ curl http://localhost:8080/v1/chat/completions \
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://localhost:8080/v1",
+    base_url="http://localhost:11434/v1",
     api_key="not-needed"
 )
 
