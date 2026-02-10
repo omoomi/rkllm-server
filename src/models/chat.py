@@ -26,7 +26,8 @@ class ContentPart(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str
-    content: Union[str, List[ContentPart]]
+    content: Union[str, List[ContentPart], None] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
 
 class Tool(BaseModel):
     type: str = "function"

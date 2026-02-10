@@ -177,8 +177,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
             detail="Model not loaded. Please check that the model file exists and try restarting the server."
         )
     
-    # Convert messages to RKLLM prompt
-    rkllm_prompt = openai_to_rkllm_prompt(request.messages)
+    # Convert messages to RKLLM prompt (including tools)
+    rkllm_prompt = openai_to_rkllm_prompt(request.messages, request.tools)
     
     # Estimate prompt tokens (rough estimate: 4 chars per token)
     prompt_tokens = len(rkllm_prompt) // TOKENS_PER_CHAR_ESTIMATE

@@ -22,8 +22,9 @@ Token Estimation:
     token counts for prompts. This is approximate and may vary by content.
 """
 
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 from src.models.chat import ChatCompletionRequest
+import json
 
 
 def extract_text_content(content: Union[str, List[Dict[str, Any]], None]) -> str:
@@ -48,12 +49,13 @@ def extract_text_content(content: Union[str, List[Dict[str, Any]], None]) -> str
         return str(content)
 
 
-def openai_to_rkllm_prompt(messages: List[Any]) -> str:
+def openai_to_rkllm_prompt(messages: List[Any], tools: Optional[List[Any]] = None) -> str:
     """
     Convert OpenAI messages to RKLLM prompt string.
     
     Args:
         messages: List of OpenAI message objects or dicts
+        tools: Optional list of tool definitions
     
     Returns:
         Formatted RKLLM prompt string
@@ -70,7 +72,33 @@ def openai_to_rkllm_prompt(messages: List[Any]) -> str:
             text_content = extract_text_content(content)
 
         if role == "system":
-            prompt_parts.append(f"<|im_start|>system\n{text_content}<|im_end|>")
+            system_msg = text_content
+            if tools:
+                tools_schema = []
+                for i, tool in enumerate(tools):
+                    func = tool.get("function", {})
+                    tools_schema.append({
+                        "name": func.get('name', ''),
+                        "description": func.get('description', ''),
+                        "parameters": func.get('parameters', {})
+                    })
+                
+                tools_prompt = "\n\n"
+                tools_prompt += "You are an assistant with access to the following tools:\n\n"
+                for tool in tools_schema:
+                    tools_prompt += f"- {tool['name']}: {tool['description']}\n"
+                
+                tools_prompt += "\n"
+                tools_prompt += "IMPORTANT INSTRUCTIONS:\n"
+                tools_prompt += "1. When you need to use a tool, you MUST respond with ONLY valid JSON in the following format:\n\n"
+                tools_prompt += '```json\n{"tool_calls": [{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}]}\n```\n\n'
+                tools_prompt += "2. Do NOT include any explanation or additional text when using a tool.\n"
+                tools_prompt += "3. When no tool is needed, respond normally with text.\n\n"
+                tools_prompt += "Example: To read a file, respond with:\n"
+                tools_prompt += '```json\n{"tool_calls": [{"name": "read_file", "arguments": {"filePath": "/home/user/file.txt"}}]}\n```\n\n'
+                
+                system_msg = text_content + tools_prompt
+            prompt_parts.append(f"<|im_start|>system\n{system_msg}<|im_end|>")
         elif role == "user":
             prompt_parts.append(f"<|im_start|>user\n{text_content}<|im_end|>")
         elif role == "assistant":
@@ -97,9 +125,25 @@ def rkllm_to_openai_response(
         OpenAI-formatted response dictionary
     """
     import time
+    import json
+    import re
     
     completion_tokens = rkllm_result.get("tokens", 0)
     text = rkllm_result.get("text", "")
+    
+    tool_calls = None
+    content = text
+    
+    if request.tools:
+        tool_calls = parse_tool_calls(text)
+        if tool_calls:
+            content = None
+    
+    message_obj = {"role": "assistant"}
+    if content is not None:
+        message_obj["content"] = content
+    if tool_calls is not None:
+        message_obj["tool_calls"] = tool_calls
     
     return {
         "id": f"chatcmpl-{int(time.time())}",
@@ -108,11 +152,8 @@ def rkllm_to_openai_response(
         "model": request.model,
         "choices": [{
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": text,
-            },
-            "finish_reason": "stop",
+            "message": message_obj,
+            "finish_reason": "tool_calls" if tool_calls else "stop",
         }],
         "usage": {
             "prompt_tokens": prompt_tokens,
@@ -120,3 +161,88 @@ def rkllm_to_openai_response(
             "total_tokens": prompt_tokens + completion_tokens,
         },
     }
+
+
+def parse_tool_calls(text: str) -> Optional[List[Dict[str, Any]]]:
+    """
+    Parse tool calls from model output.
+    
+    Looks for JSON blocks containing tool_calls in various formats:
+    - ```json {...} ```
+    - {"tool_calls": [...]}
+    - Just {...} when in tool context
+    
+    Args:
+        text: Model output text
+    
+    Returns:
+        List of tool calls in OpenAI format, or None if no calls found
+    """
+    import json
+    import re
+    
+    patterns = [
+        r'```json\s*(\{.*?\})\s*```',
+        r'\{\s*"tool_calls"\s*:\s*(\[.*?\])\s*\}',
+        r'\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{.*?\})\s*\}',
+    ]
+    
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.DOTALL)
+        if matches:
+            try:
+                if pattern == patterns[0]:
+                    data = json.loads(matches[0])
+                    if "tool_calls" in data:
+                        return format_tool_calls(data["tool_calls"])
+                    elif "name" in data and "arguments" in data:
+                        return format_tool_calls([data])
+                elif pattern == patterns[1]:
+                    tool_calls = json.loads(matches[0])
+                    return format_tool_calls(tool_calls)
+                elif pattern == patterns[2]:
+                    tool_call = {
+                        "name": matches[0],
+                        "arguments": json.loads(matches[1])
+                    }
+                    return format_tool_calls([tool_call])
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+    
+    return None
+
+
+def format_tool_calls(tool_calls_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Format tool calls to OpenAI API format.
+    
+    Args:
+        tool_calls_data: Raw tool calls from model
+    
+    Returns:
+        Tool calls in OpenAI format
+    """
+    import time
+    import json
+    
+    formatted = []
+    for i, tc in enumerate(tool_calls_data):
+        call_id = f"call_{int(time.time())}_{i}"
+        name = tc.get("name", "")
+        arguments = tc.get("arguments", {})
+        
+        if isinstance(arguments, str):
+            arguments_str = arguments
+        else:
+            arguments_str = json.dumps(arguments)
+        
+        formatted.append({
+            "id": call_id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": arguments_str
+            }
+        })
+    
+    return formatted
