@@ -45,6 +45,7 @@ Select model in `.env`:
 | Model | Size | Context | Speed | Description |
 |--------|------|---------|--------|-------------|
 | `Qwen3-4B-1.2.0` | 4B | 4096 | ~3-4 t/s | Larger, more capable |
+| `Qwen3-1.7B` | 1.7B | 16384 | ~6-8 t/s | Balanced size and performance |
 | `Qwen3-0.6B-w8a8-ctx16384` | 0.6B | 16384 | ~11-12 t/s | Default, 16K context |
 
 **Switch models**:
