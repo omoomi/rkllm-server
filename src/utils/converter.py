@@ -49,13 +49,14 @@ def extract_text_content(content: Union[str, List[Dict[str, Any]], None]) -> str
         return str(content)
 
 
-def openai_to_rkllm_prompt(messages: List[Any], tools: Optional[List[Any]] = None) -> str:
+def openai_to_rkllm_prompt(messages: List[Any], tools: Optional[List[Any]] = None, model_name: str = "Qwen3-0.6B-w8a8-ctx16384") -> str:
     """
     Convert OpenAI messages to RKLLM prompt string.
     
     Args:
         messages: List of OpenAI message objects or dicts
         tools: Optional list of tool definitions
+        model_name: Name of the model being used
     
     Returns:
         Formatted RKLLM prompt string
@@ -76,7 +77,10 @@ def openai_to_rkllm_prompt(messages: List[Any], tools: Optional[List[Any]] = Non
             if tools:
                 tools_schema = []
                 for i, tool in enumerate(tools):
-                    func = tool.get("function", {})
+                    if isinstance(tool, dict):
+                        func = tool.get("function", {})
+                    else:
+                        func = tool.function
                     tools_schema.append({
                         "name": func.get('name', ''),
                         "description": func.get('description', ''),

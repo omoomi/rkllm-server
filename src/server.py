@@ -178,7 +178,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
     
     # Convert messages to RKLLM prompt (including tools)
-    rkllm_prompt = openai_to_rkllm_prompt(request.messages, request.tools)
+    rkllm_prompt = openai_to_rkllm_prompt(request.messages, request.tools, request.model)
     
     # Estimate prompt tokens (rough estimate: 4 chars per token)
     prompt_tokens = len(rkllm_prompt) // TOKENS_PER_CHAR_ESTIMATE

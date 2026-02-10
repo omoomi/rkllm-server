@@ -2,7 +2,7 @@
 
 Single LLM server for Orange Pi 5 Max (RK3588) with full OpenAI API compatibility.
 
-**Status**: ✅ Production Ready (Limited) | **Last Updated**: February 9, 2026
+**Status**: ✅ Production Ready (Limited) | **Last Updated**: February 10, 2026
 
 ## Quick Start
 
@@ -26,13 +26,13 @@ cp .env.example .env
 # 5. Start server
 ./run_server.sh
 
-# 6. Test the server
+# 6. Test server
 curl http://localhost:11434/health
 ```
 
 ## Features
 
-- Multiple model support (0.6B, 4B, large context variants)
+- Multiple model support (0.6B, 1.7B, 1B, 3B, 4B, large context variants)
 - OpenAI-compatible `/v1/chat/completions` endpoint with **tool calling support**
 - Streaming and non-streaming responses
 - NPU acceleration (~11-12 tokens/s)
@@ -46,28 +46,35 @@ Select model in `.env`:
 **Important Note on Tool Calling:**
 - **Qwen3-0.6B-w8a8**: Basic tool calling support, but may be inconsistent
 - **Qwen3-1.7B**: Better tool calling with larger model, more consistent
-- **For production tool calling**: Consider using models specifically trained for function calling:
-  - Llama 3.2-3B-Instruct (excellent tool calling)
-  - Qwen3-Coder-1.7B-Instruct (optimized for tools)
-  - Qwen3-Coder-1.5B-Instruct (smaller, faster)
+- **Llama-3.2-1B-Instruct**: Fast inference, but poor tool calling
+- **Llama-3.2-3B-Instruct**: Better tool calling, but slower performance
+- **For production tool calling**: Use **Qwen3-1.7B** for best results
+- **For general chat**: Use **Llama-3.2-1B** for fastest performance
 
 **Model comparison for tool calling:**
 
  | Model | Size | Context | Speed | Tool Calling | Description |
  |--------|------|---------|--------|-------------|-------------|
  | `Qwen3-4B-1.2.0` | 4B | 4096 | ~3-4 t/s | Good | Larger, more capable |
- | `Qwen3-1.7B` | 1.7B | 16384 | ~6-8 t/s | Good | Balanced size and performance |
+ | `Qwen3-1.7B` | 1.7B | 16384 | ~6-8 t/s | **Best** | Balanced size and performance |
  | `Qwen3-0.6B-w8a8-ctx16384` | 0.6B | 16384 | ~11-12 t/s | Basic | Default, 16K context |
+ | `Llama-3.2-3B-Instruct_w8a8_ctx16384_RK3588` | 3B | 16384 | ~5-7 t/s | Good | Better reasoning, slower |
+ | `Llama-3.2-1B-Instruct_w8a8_ctx16384_RK3588` | 1B | 16384 | ~8-10 t/s | Poor | Fastest, least capable |
 
-**Recommended models for tool calling:**
-- **Llama 3.2-3B-Instruct**: Excellent tool calling, but needs RKNN conversion
-- **Qwen3-Coder-1.7B**: Good tool calling, optimized for code
-- Consider using vLLM/llama.cpp for better function call support
+**Performance comparison (simple chat):**
+- **Fastest**: Llama-3.2-1B (~8-10 t/s)
+- **Balanced**: Qwen3-1.7B (~6-8 t/s)
+- **Slowest**: Llama-3.2-3B (~5-7 t/s)
 
-**Switch models**:
+**Tool calling test results (with clean prompts):**
+- **Best**: Qwen3-1.7B (75% success rate)
+- **Good**: Llama-3.2-3B (75% success rate)
+- **Fair**: Llama-3.2-1B (50% success rate)
+
+**Switch models:**
 ```bash
 # Edit .env
-MODEL_NAME=Qwen3-4B-1.2.0
+MODEL_NAME=Qwen3-1.7B
 
 # Restart server
 ./run_server.sh
@@ -80,23 +87,23 @@ Edit `.env` to customize:
 ```bash
 # Server
 HOST=0.0.0.0
-PORT=8080
+PORT=11434
 LOG_LEVEL=info
 
-# Model selection
-MODEL_NAME=Qwen3-0.6B-w8a8-ctx16384
+# Model selection (choose from: Qwen3-4B-1.2.0, Qwen3-1.7B, Qwen3-0.6B-w8a8-ctx16384, Llama-3.2-1B-Instruct_w8a8_ctx16384_RK3588, Llama-3.2-3B-Instruct_w8a8_ctx16384_RK3588)
+MODEL_NAME=Qwen3-1.7B
 
 # Model settings (optional - overrides model defaults)
-MAX_CONTEXT_LEN=4096
-MAX_NEW_TOKENS=2048
-TEMPERATURE=0.8
-TOP_P=0.9
-TOP_K=1
-REPEAT_PENALTY=1.1
+MAX_CONTEXT_LEN=16384       # Maximum context window in tokens (1-16384)
+MAX_NEW_TOKENS=2048         # Maximum tokens to generate (1-2048)
+TEMPERATURE=0.8               # Sampling temperature (0.0-2.0, higher = more random)
+TOP_P=0.9                    # Nucleus sampling parameter (0.0-1.0, controls diversity)
+TOP_K=1                        # Top-K sampling (>= 1, higher = less diverse)
+REPEAT_PENALTY=1.1          # Penalize repetition (>= 1.0, higher = less repetition)
 
-# Performance
+# Performance (balanced)
 CPU_CORES=AUTO                # AUTO, range (4-7), or list (4,5,6,7)
-ENABLE_EMBED_FLASH=1
+ENABLE_EMBED_FLASH=1          # Enable flash attention (0/1, improves performance)
 ```
 
 ## Testing
@@ -121,7 +128,7 @@ pytest tests/
 curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen3-0.6B-w8a8-ctx16384",
+    "model": "Qwen3-1.7B",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -193,7 +200,7 @@ client = OpenAI(
 )
 
 completion = client.chat.completions.create(
-    model="Qwen3-0.6B-w8a8-ctx16384",
+    model="Qwen3-1.7B",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 
@@ -323,25 +330,18 @@ Issue: Model responds with text instead of tool_calls
 2. **Temperature too high**: High temperature can cause the model to ignore tool instructions
    - **Solution**: Lower temperature to 0.2-0.4 for more deterministic tool calling
 
-3. **Insufficient context**: Tool definitions may exceed model context window
+3. **Complex system prompt**: Too much context before user input overwhelms the model
+   - **Solution**: Simplify system prompt, reduce bootstrap files, minimize skills content
+
+4. **Insufficient context**: Tool definitions may exceed model context window
    - **Solution**: Reduce number of tools or use smaller tool definitions
 
-4. **Model requires fine-tuning**: Not all models are trained for structured JSON output
-   - **Solution**: Use models specifically trained for function calling
-   - Recommended: Llama 3.2-3B-Instruct, Qwen3-Coder-1.7B-Instruct
-Error: Model file not found
-```
-Solution: Download model from Hugging Face to `models/` directory.
-
-**Library not found**
-```
-Error: librkllmrt.so: cannot open shared object file
-```
-Solution: Copy `librkllmrt.so` from RKLLM SDK to `lib/` directory.
-
-**NPU errors**
-```
-Error: RKLLM init failed with code -1
+**Tool calling best practices:**
+- Use **Qwen3-1.7B** for most reliable tool calling
+- Lower temperature (0.2-0.4) for tool requests
+- Use clean, focused system messages
+- Add explicit tool instructions in system prompt
+- Consider using `tool_choice: "required"` for forcing tool calls
 
 ## Links
 
@@ -351,4 +351,4 @@ Error: RKLLM init failed with code -1
 - [Detailed Setup Guide](SETUP.md)
 - [Implementation Status](STATUS.md)
 - [RKLLM Framework](https://github.com/airockchip/rknn-llm)
-- [Model Repository](https://huggingface.co/ThomasTheMaker/Qwen3-0.6B-RKLLM-1.2.1B)
+- [Tool Calling Test Results](docs/TOOL_CALLING_TEST_RESULTS.md) - Comprehensive model comparison and test results
