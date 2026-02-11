@@ -2,7 +2,7 @@
 
 Single LLM server for Orange Pi 5 Max (RK3588) with full OpenAI API compatibility.
 
-**Status**: ✅ Production Ready (Limited) | **Last Updated**: February 10, 2026
+**Status**: ✅ Production Ready (Single-turn) | **Last Updated**: February 11, 2026
 
 ## Quick Start
 
@@ -15,70 +15,57 @@ pip install -r requirements.txt
 # 2. Verify models (optional)
 bash scripts/verify_models.sh
 
-# 3. Download required files
-# - RKLLM Runtime: https://console.zbox.filez.com/l/RJJDmB (code: rkllm)
-# - Model: https://huggingface.co/ThomasTheMaker/Qwen3-0.6B-RKLLM-1.2.1B
-
-# 4. Configure server (optional)
+# 3. Configure server (optional)
 cp .env.example .env
-# Edit .env to customize model, port, and settings
+# Edit .env to select model and configure settings
 
-# 5. Start server
+# 4. Start server
 ./run_server.sh
 
-# 6. Test server
+# 5. Test server
 curl http://localhost:11434/health
 ```
 
 ## Features
 
-- Multiple model support (0.6B, 1.7B, 1B, 3B, 4B, large context variants)
+- **Multiple model support**: Qwen3-4B, 3.2B, 1.7B, 0.6B, Llama 3.2B/1B with 16K context
 - OpenAI-compatible `/v1/chat/completions` endpoint with **tool calling support**
 - Streaming and non-streaming responses
-- NPU acceleration (~11-12 tokens/s)
+- NPU acceleration (3-4 tokens/sec depending on model)
 - Model selection via `.env` configuration
 - **Function/Tool calling**: Parse tool definitions and return structured tool calls from model output
+- Markdown code block parsing for tool calls (```json format)
 
-## Models
+## Available Models
 
 Select model in `.env`:
 
-**Important Note on Tool Calling:**
-- **Qwen3-0.6B-w8a8**: Basic tool calling support, but may be inconsistent
-- **Qwen3-1.7B**: Better tool calling with larger model, more consistent
-- **Llama-3.2-1B-Instruct**: Fast inference, but poor tool calling
-- **Llama-3.2-3B-Instruct**: Better tool calling, but slower performance
-- **For production tool calling**: Use **Qwen3-1.7B** for best results
-- **For general chat**: Use **Llama-3.2-1B** for fastest performance
+| Model Name | Size | Context | Speed | Tool Calling | Recommended Use |
+|-----------|------|---------|--------|-------------|-----------------|
+| `Qwen3-4B-Instruct-2507_w8a8_ctx16384_RK3588` | 4.6GB | 16384 | ~3-4 t/s | Good | Complex reasoning |
+| `Qwen3-1.7B` | 2.2GB | 16384 | ~6-8 t/s | Good | Balanced |
+| `Qwen3-0.6B-w8a8-ctx16384` | 0.9GB | 16384 | ~11-12 t/s | Basic | Fast chat |
+| `Llama-3.2-3B-Instruct_w8a8_ctx16384_RK3588` | 4.0GB | 16384 | ~4-6 t/s | Excellent | Best tool calling |
+| `Llama-3.2-1B-Instruct_w8a8_ctx16384_RK3588` | 1.8GB | 16384 | ~8-10 t/s | Excellent | Fast chat |
 
-**Model comparison for tool calling:**
+### Model Recommendations
 
- | Model | Size | Context | Speed | Tool Calling | Description |
- |--------|------|---------|--------|-------------|-------------|
- | `Qwen3-4B-1.2.0` | 4B | 4096 | ~3-4 t/s | Good | Larger, more capable |
- | `Qwen3-1.7B` | 1.7B | 16384 | ~6-8 t/s | **Best** | Balanced size and performance |
- | `Qwen3-0.6B-w8a8-ctx16384` | 0.6B | 16384 | ~11-12 t/s | Basic | Default, 16K context |
- | `Llama-3.2-3B-Instruct_w8a8_ctx16384_RK3588` | 3B | 16384 | ~5-7 t/s | Good | Better reasoning, slower |
- | `Llama-3.2-1B-Instruct_w8a8_ctx16384_RK3588` | 1B | 16384 | ~8-10 t/s | Poor | Fastest, least capable |
+**For Tool Calling with Direct API (single request):**
+- **Qwen3-1.7B**: Best balance of speed and capability (75% success with clean prompts)
+- **Qwen3-4B**: Best reasoning, but slower (3-4 t/s)
+- **Llama-3.2-3B**: Best tool calling performance (75% success)
 
-**Performance comparison (simple chat):**
-- **Fastest**: Llama-3.2-1B (~8-10 t/s)
-- **Balanced**: Qwen3-1.7B (~6-8 t/s)
-- **Slowest**: Llama-3.2-3B (~5-7 t/s)
+**⚠️ CRITICAL - Picoclaw Integration:**
+- **NO local quantized models (W8A8) work reliably with Picoclaw's multi-turn tool loop**
+- All tested models (0.6B, 1.7B, 4B) exhibit the same failure:
+  - Generate correct tool calls initially
+  - Fail to understand that tool result = task completion
+  - Continue calling tools indefinitely until max_tool_iterations
+- **For Picoclaw tool-calling workflows, use cloud models** (GPT-4, Claude, etc.)
 
-**Tool calling test results (with clean prompts):**
-- **Best**: Qwen3-1.7B (75% success rate)
-- **Good**: Llama-3.2-3B (75% success rate)
-- **Fair**: Llama-3.2-1B (50% success rate)
-
-**Switch models:**
-```bash
-# Edit .env
-MODEL_NAME=Qwen3-1.7B
-
-# Restart server
-./run_server.sh
-```
+**For General Chat:**
+- **Llama-3.2-1B**: Fastest model (8-10 t/s), good for simple Q&A
+- **Qwen3-0.6B**: Fast alternative, 16K context
 
 ## Configuration
 
@@ -90,7 +77,8 @@ HOST=0.0.0.0
 PORT=11434
 LOG_LEVEL=info
 
-# Model selection (choose from: Qwen3-4B-1.2.0, Qwen3-1.7B, Qwen3-0.6B-w8a8-ctx16384, Llama-3.2-1B-Instruct_w8a8_ctx16384_RK3588, Llama-3.2-3B-Instruct_w8a8_ctx16384_RK3588)
+# Model selection
+# Recommended: Qwen3-1.7B for balance, Qwen3-4B for complex tasks
 MODEL_NAME=Qwen3-1.7B
 
 # Model settings (optional - overrides model defaults)
@@ -106,19 +94,14 @@ CPU_CORES=AUTO                # AUTO, range (4-7), or list (4,5,6,7)
 ENABLE_EMBED_FLASH=1          # Enable flash attention (0/1, improves performance)
 ```
 
-## Testing
+### Temperature Guidelines
 
-```bash
-# Test health
-curl http://localhost:11434/health
-
-# List models
-curl http://localhost:11434/v1/models
-
-# Run tests
-source venv/bin/activate
-pytest tests/
-```
+| Use Case | Recommended Temperature |
+|-----------|----------------------|
+| **Tool calling** | 0.2-0.4 (Low temperature = more deterministic) |
+| **Creative writing** | 0.7-1.0 (Higher temperature = more creative) |
+| **Code generation** | 0.3-0.5 (Balanced) |
+| **General chat** | 0.6-0.8 (Default) |
 
 ## Usage Examples
 
@@ -133,7 +116,7 @@ curl http://localhost:11434/v1/chat/completions \
   }'
 ```
 
-### cURL - Tool Calling
+### cURL - Tool Calling (Direct API - WORKING)
 
 ```bash
 curl http://localhost:11434/v1/chat/completions \
@@ -141,37 +124,39 @@ curl http://localhost:11434/v1/chat/completions \
   -d '{
     "model": "Qwen3-1.7B",
     "messages": [
-      {"role": "user", "content": "Read the README.md file"}
+      {
+        "role": "system",
+        "content": "You are a helpful assistant with access to tools. When a user asks you to perform an action that requires a tool, use the appropriate tool."
+      },
+      {
+        "role": "user",
+        "content": "List files in /home/elsa/repos/rkllm-server/src"
+      }
     ],
     "tools": [{
       "type": "function",
       "function": {
-        "name": "read_file",
-        "description": "Read file contents from the filesystem",
+        "name": "list_dir",
+        "description": "List files and directories in a path",
         "parameters": {
           "type": "object",
           "properties": {
-            "filePath": {
+            "path": {
               "type": "string",
-              "description": "Path to the file to read"
+              "description": "Path to list"
             }
           },
-          "required": ["filePath"]
+          "required": ["path"]
         }
       }
     }],
-    "tool_choice": "auto",
     "temperature": 0.3
   }'
 ```
 
-**Tool Calling Response Format:**
-When the model uses a tool, the response will include a `tool_calls` field:
-
+**Response Format:**
 ```json
 {
-  "id": "chatcmpl-123",
-  "object": "chat.completion",
   "choices": [{
     "message": {
       "role": "assistant",
@@ -179,17 +164,17 @@ When the model uses a tool, the response will include a `tool_calls` field:
         "id": "call_1234567890_0",
         "type": "function",
         "function": {
-          "name": "read_file",
-          "arguments": "{\"filePath\": \"/home/user/README.md\"}"
+          "name": "list_dir",
+          "arguments": "{\"path\": \"/home/elsa/repos/rkllm-server/src\"}"
         }
-      }],
-      "finish_reason": "tool_calls"
-    }
+      }]
+    },
+    "finish_reason": "tool_calls"
   }]
 }
 ```
 
-### OpenAI Python Client - Basic Chat
+### OpenAI Python Client
 
 ```python
 from openai import OpenAI
@@ -207,48 +192,6 @@ completion = client.chat.completions.create(
 print(completion.choices[0].message.content)
 ```
 
-### OpenAI Python Client - Tool Calling
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:11434/v1",
-    api_key="not-needed"
-)
-
-response = client.chat.completions.create(
-    model="Qwen3-1.7B",
-    messages=[{"role": "user", "content": "Read the README.md file"}],
-    tools=[{
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read file contents from the filesystem",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filePath": {
-                        "type": "string",
-                        "description": "Path to the file to read"
-                    }
-                },
-                "required": ["filePath"]
-            }
-        }
-    }],
-    tool_choice="auto"
-)
-
-if response.choices[0].message.tool_calls:
-    for tool_call in response.choices[0].message.tool_calls:
-        tool_name = tool_call.function.name
-        tool_args = tool_call.function.arguments
-        print(f"Tool called: {tool_name} with args: {tool_args}")
-else:
-    print(response.choices[0].message.content)
-```
-
 ## API Endpoints
 
 ### POST `/v1/chat/completions`
@@ -258,11 +201,41 @@ Chat completion endpoint (OpenAI-compatible with tool calling support).
 **Parameters:**
 - `model` (required): Model ID
 - `messages` (required): Message array with `role` and `content`
-- `temperature` (optional): 0.0-2.0, default 0.8
+- `temperature` (optional): 0.0-2.0, default from model config
 - `max_tokens` (optional): Max tokens to generate
 - `stream` (optional): Enable streaming
 - `tools` (optional): Array of tool definitions for function calling
-- `tool_choice` (optional): Tool selection strategy ("auto", "none", or specific function)
+
+**Response Format:**
+```json
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "Text response OR null if tool_calls",
+      "tool_calls": [
+        {
+          "id": "call_1234567890_0",
+          "type": "function",
+          "function": {
+            "name": "tool_name",
+            "arguments": "{\"param\": \"value\"}"
+          }
+        }
+      ]
+    },
+    "finish_reason": "stop" | "tool_calls"
+  }],
+  "usage": {
+    "prompt_tokens": 50,
+    "completion_tokens": 27,
+    "total_tokens": 77
+  }
+}
+```
 
 ### GET `/v1/models`
 
@@ -271,24 +244,35 @@ List available models.
 ### GET `/health`
 
 Health check endpoint.
+```json
+{
+  "status": "healthy" | "unhealthy",
+  "model": "Qwen3-1.7B",
+  "model_loaded": true
+}
+```
 
 ## Project Structure
 
 ```
 rkllm-server/
 ├── venv/                    # Python virtual environment
-├── lib/                     # RKLLM runtime library
+├── lib/                      # RKLLM runtime library
 ├── models/                   # Model files
 ├── src/                      # Source code
-│   ├── server.py             # FastAPI server
+│   ├── server.py            # FastAPI server
 │   ├── rkllm_wrapper.py     # RKLLM bindings
-│   ├── models/               # Pydantic models
-│   └── utils/               # Utilities
+│   ├── models/              # Pydantic models
+│   └── utils/               # Utilities (converter, logging)
 ├── examples/                 # Usage examples
-├── scripts/                  # Helper scripts
 ├── tests/                   # Tests
 ├── .env                     # Configuration
-└── run_server.sh           # Startup script
+├── run_server.sh           # Startup script
+└── docs/                    # Documentation
+    ├── ARCHITECTURE.md          # System design
+    ├── TOOL_CALLING_TEST_RESULTS.md   # Tool calling model comparison
+    ├── PICOCLAW_INTEGRATION_TEST_RESULTS.md   # Picoclaw integration results
+    └── QWEN4B_TEST_RESULTS.md   # Qwen3-4B test results
 ```
 
 ## Prerequisites
@@ -300,55 +284,100 @@ rkllm-server/
 
 ## Troubleshooting
 
-**Model not found**
+### Model not found
+
+**Error:**
 ```
 Error: Model file not found
 ```
-Solution: Download model from Hugging Face to `models/` directory.
 
-**Library not found**
+**Solution:** Download model to `models/` directory. See `src/models/config.json` for available models.
+
+### Library not found
+
+**Error:**
 ```
 Error: librkllmrt.so: cannot open shared object file
 ```
-Solution: Copy `librkllmrt.so` from RKLLM SDK to `lib/` directory.
 
-**NPU errors**
-```
-Error: RKLLM init failed with code -1
-```
+**Solution:** Copy `librkllmrt.so` from RKLLM SDK to `lib/` directory.
 
-**Tool calling not working**
-```
-Issue: Model responds with text instead of tool_calls
-```
+### Tool calling not working
+
+**Issue:** Model responds with text instead of tool_calls
 
 **Possible causes:**
-1. **Model not function-call capable**: Some quantized models (especially W8A8) may not be fine-tuned for function calling
-   - **Solution**: Try models with better instruction following (Qwen3-1.7B, Llama 3.2)
-   - Or use function-call specific models (Qwen3-Coder, Llama 3.2 tool-graded)
 
-2. **Temperature too high**: High temperature can cause the model to ignore tool instructions
-   - **Solution**: Lower temperature to 0.2-0.4 for more deterministic tool calling
+1. **Model not function-call capable**
+   - **Solution:** Use models with better instruction following (Qwen3-1.7B, Llama-3.2-3B)
 
-3. **Complex system prompt**: Too much context before user input overwhelms the model
-   - **Solution**: Simplify system prompt, reduce bootstrap files, minimize skills content
+2. **Temperature too high**
+   - **Solution:** Lower temperature to 0.2-0.4 for more deterministic output
 
-4. **Insufficient context**: Tool definitions may exceed model context window
-   - **Solution**: Reduce number of tools or use smaller tool definitions
+3. **Complex system prompt**
+   - **Solution:** Simplify system prompt, reduce bootstrap files
+   - Picoclaw: Set `lean_mode: true` in config
 
-**Tool calling best practices:**
-- Use **Qwen3-1.7B** for most reliable tool calling
-- Lower temperature (0.2-0.4) for tool requests
-- Use clean, focused system messages
-- Add explicit tool instructions in system prompt
-- Consider using `tool_choice: "required"` for forcing tool calls
+4. **Multi-turn tool conversation failure**
+   - **Problem:** Model calls tool correctly but doesn't understand tool result = answer
+   - **Root cause:** Quantized W8A8 models lack reasoning for multi-turn patterns
+   - **Workaround:** Use cloud models (GPT-4, Claude) for Picoclaw
+   - **Long-term solution:** Fine-tune model for specific conversation pattern
+
+5. **Picoclaw integration specific issue**
+   - **All local models tested (0.6B, 1.7B, 4B) fail with Picoclaw's agent loop**
+   - Model generates tool calls correctly on direct API
+   - But cannot complete multi-turn tool conversations in Picoclaw
+   - **Recommendation:** Use cloud models for Picoclaw workflows
+
+### Tool calling best practices
+
+- **Temperature:** Use 0.2-0.4 for tool requests (more deterministic)
+- **System prompt:** Keep it simple, focused on tool instructions
+- **Tool count:** Limit to 4-6 essential tools for small models
+- **Examples:** Include 2-3 concrete examples in system prompt
+
+## Documentation
+
+- [Architecture Documentation](docs/ARCHITECTURE.md) - System design and data flow
+- [Tool Calling Test Results](docs/TOOL_CALLING_TEST_RESULTS.md) - Comprehensive model comparison
+- [Picoclaw Integration](docs/PICOCLAW_INTEGRATION_TEST_RESULTS.md) - Integration test results
+- [Qwen3-4B Test Results](docs/QWEN4B_TEST_RESULTS.md) - Qwen3-4B testing details
+- [RKLLM Framework](https://github.com/airockchip/rknn-llm) - Official RKLLM runtime
+
+## Known Limitations
+
+### Tool Calling
+
+**Single-turn tool calling:** ✅ WORKING with direct API
+- Models generate correct tool calls when given proper prompts
+- Success rate: ~75% with Qwen3-1.7B and Llama-3.2-3B
+- Success rate: ~75% with Qwen3-4B
+
+**Multi-turn tool conversations:** ❌ NOT WORKING with Picoclaw
+- All quantized W8A8 models (0.6B, 1.7B, 4B) fail
+- Model cannot understand that tool result = task completion
+- Continues calling tools indefinitely until max_tool_iterations
+- This is a training pattern mismatch, not a capacity issue
+
+**Recommendation:** For tool-calling workflows like Picoclaw, use cloud models or fine-tune local models specifically for multi-turn patterns.
+
+## Performance Metrics
+
+| Model | Size | Speed | Memory | NPU Usage |
+|--------|------|-------|--------|-----------|
+| Qwen3-0.6B | 0.9GB | 11-12 t/s | ~900MB | Low (3 cores) |
+| Qwen3-1.7B | 2.2GB | 6-8 t/s | ~2GB | Medium (3 cores) |
+| Qwen3-4B | 4.6GB | 3-4 t/s | ~4GB | High (3 cores) |
+| Llama-3.2-1B | 1.8GB | 8-10 t/s | ~1.5GB | Low (3 cores) |
+| Llama-3.2-3B | 4.0GB | 4-6 t/s | ~3GB | High (3 cores) |
 
 ## Links
 
-- [Architecture Documentation](docs/ARCHITECTURE.md) - System design and data flow
-- [RKLLM Framework](https://github.com/airockchip/rknn-llm) - Official RKLLM runtime
-- [Model Repository](https://huggingface.co/ThomasTheMaker/Qwen3-0.6B-RKLLM-1.2.1B) - Model files and documentation
-- [Detailed Setup Guide](SETUP.md)
-- [Implementation Status](STATUS.md)
+- [Architecture Documentation](docs/ARCHITECTURE.md)
 - [RKLLM Framework](https://github.com/airockchip/rknn-llm)
-- [Tool Calling Test Results](docs/TOOL_CALLING_TEST_RESULTS.md) - Comprehensive model comparison and test results
+- [Model Repository](https://huggingface.co/ThomasTheMaker/Qwen3-0.6B-RKLLM-1.2.1B)
+
+## License
+
+Based on RKLLM and model licenses. See individual component licenses for details.

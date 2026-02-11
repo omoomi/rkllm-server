@@ -88,18 +88,28 @@ def openai_to_rkllm_prompt(messages: List[Any], tools: Optional[List[Any]] = Non
                     })
                 
                 tools_prompt = "\n\n"
-                tools_prompt += "You are an assistant with access to the following tools:\n\n"
+                tools_prompt += "## TOOL USAGE INSTRUCTIONS (CRITICAL)\n\n"
+                tools_prompt += "You have access to tools. When the user asks you to perform an action that requires a tool,\n"
+                tools_prompt += "you MUST respond with ONLY valid JSON - no explanations, no additional text.\n\n"
+                
+                tools_prompt += "**Format:**\n"
+                tools_prompt += '```json\n{"tool_calls": [{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}]}\n```\n\n'
+                
+                tools_prompt += "**Available Tools:**\n"
                 for tool in tools_schema:
                     tools_prompt += f"- {tool['name']}: {tool['description']}\n"
                 
-                tools_prompt += "\n"
-                tools_prompt += "IMPORTANT INSTRUCTIONS:\n"
-                tools_prompt += "1. When you need to use a tool, you MUST respond with ONLY valid JSON in the following format:\n\n"
-                tools_prompt += '```json\n{"tool_calls": [{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}]}\n```\n\n'
-                tools_prompt += "2. Do NOT include any explanation or additional text when using a tool.\n"
-                tools_prompt += "3. When no tool is needed, respond normally with text.\n\n"
-                tools_prompt += "Example: To read a file, respond with:\n"
-                tools_prompt += '```json\n{"tool_calls": [{"name": "read_file", "arguments": {"filePath": "/home/user/file.txt"}}]}\n```\n\n'
+                tools_prompt += "\n**Examples:**\n"
+                tools_prompt += "User: List files in /tmp\n"
+                tools_prompt += 'Assistant: ```json\n{"tool_calls": [{"name": "list_dir", "arguments": {"path": "/tmp"}}]}\n```\n\n'
+                
+                tools_prompt += "User: Check memory usage\n"
+                tools_prompt += 'Assistant: ```json\n{"tool_calls": [{"name": "exec", "arguments": {"command": "free -h"}}]}\n```\n\n'
+                
+                tools_prompt += "User: Read README.md\n"
+                tools_prompt += 'Assistant: ```json\n{"tool_calls": [{"name": "read_file", "arguments": {"path": "README.md"}}]}\n```\n\n'
+                
+                tools_prompt += "**IMPORTANT:** Only respond with JSON when using a tool. Otherwise, respond normally with text.\n"
                 
                 system_msg = text_content + tools_prompt
             prompt_parts.append(f"<|im_start|>system\n{system_msg}<|im_end|>")
@@ -109,7 +119,8 @@ def openai_to_rkllm_prompt(messages: List[Any], tools: Optional[List[Any]] = Non
             prompt_parts.append(f"<|im_start|>assistant\n{text_content}<|im_end|>")
 
     prompt_parts.append("<|im_start|>assistant\n")
-    return "".join(prompt_parts)
+    prompt = "".join(prompt_parts)
+    return prompt
 
 
 def rkllm_to_openai_response(
@@ -131,6 +142,8 @@ def rkllm_to_openai_response(
     import time
     import json
     import re
+    import logging
+    logger = logging.getLogger(__name__)
     
     completion_tokens = rkllm_result.get("tokens", 0)
     text = rkllm_result.get("text", "")
@@ -190,6 +203,11 @@ def parse_tool_calls(text: str) -> Optional[List[Dict[str, Any]]]:
         r'\{\s*"tool_calls"\s*:\s*(\[.*?\])\s*\}',
         r'\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{.*?\})\s*\}',
     ]
+    
+    # Additional patterns for markdown code blocks with full objects
+    patterns.extend([
+        r'```json\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\})\s*```',
+    ])
     
     for pattern in patterns:
         matches = re.findall(pattern, text, re.DOTALL)

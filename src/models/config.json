@@ -51,6 +51,19 @@
       "quantization": "W8A8",
       "file_size_gb": 4.0,
       "tokens_per_sec": "~4-6"
+    },
+    "Qwen3-4B-Instruct-2507_w8a8_ctx16384_RK3588": {
+      "model_path": "models/Qwen3-4B-Instruct-2507_w8a8_ctx16384_RK3588.rkllm",
+      "max_context_len": 16384,
+      "max_new_tokens": 2048,
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 1,
+      "repeat_penalty": 1.1,
+      "description": "Qwen3 4B Instruct with W8A8 quantization and 16K context window - Best for complex tool calling",
+      "quantization": "W8A8",
+      "file_size_gb": 4.6,
+      "tokens_per_sec": "~3-4"
     }
   },
   "default_model": "Qwen3-0.6B-w8a8-ctx16384"
