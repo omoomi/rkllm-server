@@ -1,5 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
+import src.server as server_module
 from src.server import app
 
 client = TestClient(app)
@@ -47,3 +48,28 @@ def test_chat_completion_validation():
         }
     )
     assert response.status_code == 422  # Validation error
+
+
+def test_streaming_chat_completion_emits_callback_fragments(monkeypatch):
+    class FakeModel:
+        def run_stream(self, role, enable_thinking, prompt):
+            yield "Hello"
+            yield ", world"
+
+    monkeypatch.setattr(server_module, "rkllm_model", FakeModel())
+
+    with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": "Qwen3-0.6B-w8a8-ctx16384",
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "stream": True,
+        },
+    ) as response:
+        assert response.status_code == 200
+        chunks = [line for line in response.iter_lines() if line]
+
+    assert any('"content":"Hello"' in line for line in chunks)
+    assert any('"content":", world"' in line for line in chunks)
+    assert chunks[-1] == "data: [DONE]"

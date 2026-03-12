@@ -61,6 +61,20 @@ class Usage(BaseModel):
     completion_tokens: int
     total_tokens: int
 
+
+class ChatCompletionChunkChoice(BaseModel):
+    index: int
+    delta: Dict[str, Any]
+    finish_reason: Optional[str] = None
+
+
+class ChatCompletionChunk(BaseModel):
+    id: str
+    object: str = "chat.completion.chunk"
+    created: int
+    model: str
+    choices: List[ChatCompletionChunkChoice]
+
 class ChatCompletionResponse(BaseModel):
     id: str
     object: str = "chat.completion"

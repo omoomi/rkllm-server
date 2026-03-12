@@ -2,7 +2,7 @@
 
 Single LLM server for Orange Pi 5 Max (RK3588) with full OpenAI API compatibility.
 
-**Status**: ✅ Production Ready (Single-turn) | **Last Updated**: February 11, 2026
+**Status**: ✅ Production Ready (Single-turn) | **Last Updated**: March 12, 2026
 
 ## Quick Start
 
@@ -28,13 +28,14 @@ curl http://localhost:11434/health
 
 ## Features
 
-- **Multiple model support**: Qwen3-4B, 3.2B, 1.7B, 0.6B, Llama 3.2B/1B with 16K context
+- **Multiple model support**: Qwen3-4B, 3.2B, 1.7B, 0.6B, distilled SHELLper variants, and Llama 3.2B/1B with 16K context
 - OpenAI-compatible `/v1/chat/completions` endpoint with **tool calling support**
 - Streaming and non-streaming responses
 - NPU acceleration (3-4 tokens/sec depending on model)
 - Model selection via `.env` configuration
 - **Function/Tool calling**: Parse tool definitions and return structured tool calls from model output
 - Markdown code block parsing for tool calls (```json format)
+- **Native callback streaming**: SSE output now forwards RKLLM callback fragments instead of re-chunking the final response in Python
 
 ## Available Models
 
@@ -44,7 +45,10 @@ Select model in `.env`:
 |-----------|------|---------|--------|-------------|-----------------|
 | `Qwen3-4B-Instruct-2507_w8a8_ctx16384_RK3588` | 4.6GB | 16384 | ~3-4 t/s | Good | Complex reasoning |
 | `Qwen3-1.7B` | 2.2GB | 16384 | ~6-8 t/s | Good | Balanced |
+| `Qwen3-1.7B-FC_w8a8_ctx16384_RK3588` | 2.3GB | 16384 | ~6-8 t/s | Good | Better long-context reasoning |
 | `Qwen3-0.6B-w8a8-ctx16384` | 0.9GB | 16384 | ~11-12 t/s | Basic | Fast chat |
+| `distil-qwen3-0.6b-SHELLper_w8a8_ctx16384_RK3588` | 0.9GB | 16384 | ~11-12 t/s | Better | Fast shell/tool tasks |
+| `distil-qwen3-0.6b-SHELLper_noquant_ctx16384_RK3588` | 1.5GB | 16384 | ~8-10 t/s | Better | Higher-quality shell/tool tasks |
 | `Llama-3.2-3B-Instruct_w8a8_ctx16384_RK3588` | 4.0GB | 16384 | ~4-6 t/s | Excellent | Best tool calling |
 | `Llama-3.2-1B-Instruct_w8a8_ctx16384_RK3588` | 1.8GB | 16384 | ~8-10 t/s | Excellent | Fast chat |
 
@@ -65,7 +69,11 @@ Select model in `.env`:
 
 **For General Chat:**
 - **Llama-3.2-1B**: Fastest model (8-10 t/s), good for simple Q&A
-- **Qwen3-0.6B**: Fast alternative, 16K context
+- **Qwen3-0.6B-w8a8-ctx16384**: Default model, 16K context, lowest latency startup
+
+**For Shell / Tool Experiments:**
+- **distil-qwen3-0.6b-SHELLper_w8a8_ctx16384_RK3588**: Best low-latency option for shell-oriented prompts
+- **distil-qwen3-0.6b-SHELLper_noquant_ctx16384_RK3588**: Higher-quality variant when you can afford the larger model
 
 ## Configuration
 
@@ -78,8 +86,8 @@ PORT=11434
 LOG_LEVEL=info
 
 # Model selection
-# Recommended: Qwen3-1.7B for balance, Qwen3-4B for complex tasks
-MODEL_NAME=Qwen3-1.7B
+# Default: Qwen3-0.6B-w8a8-ctx16384 for fastest responses
+MODEL_NAME=Qwen3-0.6B-w8a8-ctx16384
 
 # Model settings (optional - overrides model defaults)
 MAX_CONTEXT_LEN=16384       # Maximum context window in tokens (1-16384)
@@ -111,7 +119,7 @@ ENABLE_EMBED_FLASH=1          # Enable flash attention (0/1, improves performanc
 curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen3-1.7B",
+    "model": "Qwen3-0.6B-w8a8-ctx16384",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -122,7 +130,7 @@ curl http://localhost:11434/v1/chat/completions \
 curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen3-1.7B",
+    "model": "Qwen3-0.6B-w8a8-ctx16384",
     "messages": [
       {
         "role": "system",
@@ -185,7 +193,7 @@ client = OpenAI(
 )
 
 completion = client.chat.completions.create(
-    model="Qwen3-1.7B",
+    model="Qwen3-0.6B-w8a8-ctx16384",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 
@@ -203,7 +211,7 @@ Chat completion endpoint (OpenAI-compatible with tool calling support).
 - `messages` (required): Message array with `role` and `content`
 - `temperature` (optional): 0.0-2.0, default from model config
 - `max_tokens` (optional): Max tokens to generate
-- `stream` (optional): Enable streaming
+- `stream` (optional): Enable SSE streaming from native RKLLM callback fragments
 - `tools` (optional): Array of tool definitions for function calling
 
 **Response Format:**
@@ -241,13 +249,17 @@ Chat completion endpoint (OpenAI-compatible with tool calling support).
 
 List available models.
 
+### Streaming Response Notes
+
+When `stream=true`, the server returns `text/event-stream` and emits OpenAI-style `chat.completion.chunk` events as RKLLM callback fragments arrive. The stream ends with a final chunk carrying `"finish_reason": "stop"` followed by `data: [DONE]`.
+
 ### GET `/health`
 
 Health check endpoint.
 ```json
 {
   "status": "healthy" | "unhealthy",
-  "model": "Qwen3-1.7B",
+  "model": "Qwen3-0.6B-w8a8-ctx16384",
   "model_loaded": true
 }
 ```

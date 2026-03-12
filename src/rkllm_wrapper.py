@@ -20,9 +20,11 @@ Example:
 
 import ctypes
 import logging
+import queue
 import sys
+import threading
 import time
-from typing import Optional
+from typing import Iterator, Optional
 
 logger = logging.getLogger("rkllm-server.rkllm_wrapper")
 
@@ -332,6 +334,8 @@ def validate_repeat_penalty(penalty: float) -> float:
 
 
 class RKLLMModel:
+    _STREAM_SENTINEL = object()
+
     def __init__(
         self,
         model_path: str,
@@ -360,6 +364,8 @@ class RKLLMModel:
         # Instance variables for callback state (thread-safe per instance)
         self._callback_text = []
         self._callback_state = -1
+        self._stream_queue: queue.Queue[str | object] | None = None
+        self._run_lock = threading.Lock()
         
         # Load library
         self.rkllm_lib = ctypes.CDLL(library_path)
@@ -455,17 +461,58 @@ class RKLLMModel:
         """Internal callback implementation that receives streaming output from RKLLM"""
         if state == RKLLM_RUN_FINISH:
             self._callback_state = state
+            self._publish_stream_event(self._STREAM_SENTINEL)
             sys.stdout.write("\n")
             sys.stdout.flush()
         elif state == RKLLM_RUN_ERROR:
             self._callback_state = state
+            self._publish_stream_event(self._STREAM_SENTINEL)
             logger.error("RKLLM inference error during generation")
             sys.stdout.write("run error\n")
             sys.stdout.flush()
         elif state == RKLLM_RUN_NORMAL:
             self._callback_state = state
-            self._callback_text.append(result.contents.text.decode('utf-8'))
+            text = result.contents.text.decode('utf-8')
+            self._callback_text.append(text)
+            self._publish_stream_event(text)
         return 0
+
+    def _publish_stream_event(self, item: str | object) -> None:
+        stream_queue = self._stream_queue
+        if stream_queue is None:
+            return
+        stream_queue.put(item)
+
+    def _build_input(
+        self,
+        role: Optional[str],
+        enable_thinking: Optional[bool],
+        prompt: str,
+    ) -> RKLLMInput:
+        rkllm_input = RKLLMInput()
+        rkllm_input.role = (role.encode('utf-8') if role is not None else b"user")
+        rkllm_input.enable_thinking = ctypes.c_bool(enable_thinking if enable_thinking is not None else False)
+        rkllm_input.input_type = RKLLM_INPUT_PROMPT
+        rkllm_input.input_data.prompt_input = ctypes.c_char_p(prompt.encode('utf-8'))
+        return rkllm_input
+
+    def _run_blocking(
+        self,
+        role: Optional[str],
+        enable_thinking: Optional[bool],
+        prompt: str,
+    ) -> None:
+        rkllm_input = self._build_input(role, enable_thinking, prompt)
+        ret = self.rkllm_run(
+            self.handle,
+            ctypes.byref(rkllm_input),
+            ctypes.byref(self.rkllm_infer_params),
+            None
+        )
+        if ret != 0:
+            self._callback_state = RKLLM_RUN_ERROR
+            self._publish_stream_event(self._STREAM_SENTINEL)
+            raise RuntimeError(f"RKLLM run failed with code {ret}")
     
     def run(
         self,
@@ -474,39 +521,68 @@ class RKLLMModel:
         prompt: str
     ) -> str:
         """Run inference and return generated text"""
-        # Reset callback state
-        self._callback_text = []
-        self._callback_state = -1
-        
-        # Build input
-        rkllm_input = RKLLMInput()
-        rkllm_input.role = (role.encode('utf-8') if role is not None else b"user")
-        rkllm_input.enable_thinking = ctypes.c_bool(enable_thinking if enable_thinking is not None else False)
-        rkllm_input.input_type = RKLLM_INPUT_PROMPT
-        rkllm_input.input_data.prompt_input = ctypes.c_char_p(prompt.encode('utf-8'))
-        
-        # Run inference
-        self.rkllm_run(
-            self.handle,
-            ctypes.byref(rkllm_input),
-            ctypes.byref(self.rkllm_infer_params),
-            None
-        )
-        
-        # Wait for completion
-        start_time = time.time()
-        while (
-            self._callback_state != RKLLM_RUN_FINISH and
-            self._callback_state != RKLLM_RUN_ERROR
-        ):
-            if time.time() - start_time > INFERENCE_TIMEOUT:
-                raise TimeoutError("Inference timeout")
-            time.sleep(INFERENCE_POLL_INTERVAL)
-        
-        if self._callback_state == RKLLM_RUN_ERROR:
-            raise RuntimeError("Inference error")
-        
-        return ''.join(self._callback_text)
+        with self._run_lock:
+            self._callback_text = []
+            self._callback_state = -1
+            self._stream_queue = None
+            self._run_blocking(role, enable_thinking, prompt)
+
+            start_time = time.time()
+            while (
+                self._callback_state != RKLLM_RUN_FINISH and
+                self._callback_state != RKLLM_RUN_ERROR
+            ):
+                if time.time() - start_time > INFERENCE_TIMEOUT:
+                    raise TimeoutError("Inference timeout")
+                time.sleep(INFERENCE_POLL_INTERVAL)
+
+            if self._callback_state == RKLLM_RUN_ERROR:
+                raise RuntimeError("Inference error")
+
+            return ''.join(self._callback_text)
+
+    def run_stream(
+        self,
+        role: Optional[str],
+        enable_thinking: Optional[bool],
+        prompt: str,
+    ) -> Iterator[str]:
+        """Run inference and yield text fragments as the callback receives them."""
+        with self._run_lock:
+            self._callback_text = []
+            self._callback_state = -1
+            self._stream_queue = queue.Queue()
+            error_holder: list[Exception] = []
+
+            def target():
+                try:
+                    self._run_blocking(role, enable_thinking, prompt)
+                except Exception as exc:
+                    error_holder.append(exc)
+                finally:
+                    self._publish_stream_event(self._STREAM_SENTINEL)
+
+            worker = threading.Thread(target=target, daemon=True)
+            worker.start()
+
+            try:
+                while True:
+                    try:
+                        item = self._stream_queue.get(timeout=INFERENCE_TIMEOUT)
+                    except queue.Empty as exc:
+                        self.abort()
+                        raise TimeoutError("Inference timeout") from exc
+                    if item is self._STREAM_SENTINEL:
+                        break
+                    yield str(item)
+            finally:
+                self._stream_queue = None
+                worker.join(timeout=1.0)
+
+            if error_holder:
+                raise error_holder[0]
+            if self._callback_state == RKLLM_RUN_ERROR:
+                raise RuntimeError("Inference error")
     
     def abort(self) -> None:
         """Abort current inference"""

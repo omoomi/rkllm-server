@@ -27,6 +27,7 @@ The RKNN-LLM server is a layered FastAPI application that provides OpenAI-compat
 │  - RKLLM C library bindings (ctypes)   │
 │  - Model lifecycle (init/run/destroy)    │
 │  - Parameter validation                  │
+│  - Thread-safe callback streaming        │
 └──────────────┬──────────────────────────┘
                │
 ┌──────────────▼──────────────────────────┐
@@ -42,8 +43,8 @@ The RKNN-LLM server is a layered FastAPI application that provides OpenAI-compat
 | Module | File | Responsibilities |
 |--------|------|-------------------|
 | **Server** | `server.py` | FastAPI app, routing, request handling, lifecycle management |
-| **RKLLM Wrapper** | `rkllm_wrapper.py` | C library bindings, inference execution, model lifecycle |
-| **Chat Models** | `models/chat.py` | Pydantic request/response models for OpenAI API |
+| **RKLLM Wrapper** | `rkllm_wrapper.py` | C library bindings, inference execution, model lifecycle, stream handoff |
+| **Chat Models** | `models/chat.py` | Pydantic request/response models for OpenAI API, including streaming chunks |
 | **Settings** | `models/common.py` | Configuration loading, environment variable management, model registry |
 | **Converter** | `utils/converter.py` | OpenAI ↔ RKLLM format conversion, token estimation |
 | **Logging** | `utils/logging.py` | Centralized logging configuration |
@@ -93,9 +94,9 @@ Special Tokens:
 2. Pydantic validates request structure
 3. Converter transforms OpenAI format → RKLLM ChatML format
 4. RKLLM wrapper executes inference via C library
-5. Callback streams tokens to Python
-6. Converter transforms RKLLM result → OpenAI response
-7. Response sent (streaming or complete)
+5. Callback publishes text fragments into a thread-safe queue
+6. Server converts callback fragments into OpenAI-compatible SSE chunks, or converts the final text into a non-streaming response
+7. Response sent to client
 
 ## Error Handling
 
@@ -111,12 +112,12 @@ Special Tokens:
 - **CPU Core Affinity**: Uses performance cores (4-7) for inference
 - **Flash Attention**: Enabled via `embed_flash` parameter
 - **Token Estimation**: Rough heuristic (4 chars/token) for usage tracking
-- **Synchronous Inference**: Blocks until complete (no request queuing)
+- **Single Active Inference**: Wrapper serializes runs with a lock because RKLLM callback state is shared per model instance
 
 ## Known Limitations
 
 1. **Single Model**: Server loads one model at startup (multi-model not supported)
 2. **No Tokenization**: Relies on character-based token estimation
 3. **Fixed Timeout**: 120 second inference timeout
-4. **No Request Queue**: Requests processed synchronously
-5. **Streaming**: Character-by-character streaming (not token-based)
+4. **No Request Queue**: Requests are serialized per loaded model instance
+5. **Streaming**: Emits callback fragments, which may not align to tokenizer token boundaries

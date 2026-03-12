@@ -21,6 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from src.models.chat import (
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatCompletionChunk,
     ModelsResponse,
 )
 from src.models.common import Settings
@@ -184,8 +185,56 @@ async def create_chat_completion(request: ChatCompletionRequest):
     prompt_tokens = len(rkllm_prompt) // TOKENS_PER_CHAR_ESTIMATE
     
     logger.info(f"Processing request with {len(request.messages)} messages")
-    
-    # Run inference
+
+    if request.stream:
+        response_id = f"chatcmpl-{int(time.time() * 1000)}"
+        created_at = int(time.time())
+
+        def generate():
+            completion_chars = 0
+            try:
+                for fragment in rkllm_model.run_stream(None, False, rkllm_prompt):
+                    if not fragment:
+                        continue
+                    completion_chars += len(fragment)
+                    chunk = ChatCompletionChunk(
+                        id=response_id,
+                        created=created_at,
+                        model=request.model,
+                        choices=[{
+                            "index": 0,
+                            "delta": {"content": fragment},
+                            "finish_reason": None,
+                        }],
+                    )
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+
+                final_chunk = ChatCompletionChunk(
+                    id=response_id,
+                    created=created_at,
+                    model=request.model,
+                    choices=[{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop",
+                    }],
+                )
+                logger.info("Generated ~%s completion tokens (streaming)", completion_chars // TOKENS_PER_CHAR_ESTIMATE)
+                yield f"data: {final_chunk.model_dump_json()}\n\n"
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                logger.error(f"Streaming inference error: {e}")
+                error_chunk = {
+                    "error": {
+                        "message": str(e),
+                        "type": "server_error",
+                    }
+                }
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+                yield "data: [DONE]\n\n"
+
+        return StreamingResponse(generate(), media_type="text/event-stream")
+
     try:
         result_text = rkllm_model.run(None, False, rkllm_prompt)
         result = {"text": result_text}
@@ -194,56 +243,15 @@ async def create_chat_completion(request: ChatCompletionRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-    
-    # Convert to OpenAI response
+
     response = rkllm_to_openai_response(result, request, prompt_tokens)
-    
-    # Estimate completion tokens (rough estimate: 4 chars per token)
+
     completion_tokens = len(result_text) // TOKENS_PER_CHAR_ESTIMATE
     response['usage']['completion_tokens'] = completion_tokens
     response['usage']['total_tokens'] = prompt_tokens + completion_tokens
-    
+
     logger.info(f"Generated {completion_tokens} tokens")
-    
-    if request.stream:
-        # Stream response in word-sized chunks for better performance
-        async def generate():
-            text = result.get("text", "")
-            words = text.split()
-            
-            for i, word in enumerate(words):
-                chunk = {
-                    "id": response["id"],
-                    "object": "chat.completion.chunk",
-                    "created": response["created"],
-                    "model": request.model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {"content": word + " " if i < len(words) - 1 else word},
-                        "finish_reason": None,
-                    }]
-                }
-                yield f"data: {json.dumps(chunk)}\n\n"
-            
-            # Final chunk
-            final_chunk = {
-                "id": response["id"],
-                "object": "chat.completion.chunk",
-                "created": response["created"],
-                "model": request.model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }]
-            }
-            yield f"data: {json.dumps(final_chunk)}\n\n"
-            yield "data: [DONE]\n\n"
-        
-        return StreamingResponse(generate(), media_type="text/event-stream")
-    else:
-        # Return non-streaming response
-        return response
+    return response
 
 
 if __name__ == "__main__":
